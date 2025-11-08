@@ -260,3 +260,22 @@
 2025-11-08 22:09:06,161 - INFO - Failed: 72
 2025-11-08 22:09:06,161 - INFO - Quarantine file: /app/quarantine/ingest_run_1.jsonl
 2025-11-08 22:09:06,162 - INFO - Database connection closed
+2025-11-08 23:13:29,589 - INFO - Connected to database successfully
+2025-11-08 23:13:29,589 - INFO - Starting ingestion from data/raw_dockets.json
+2025-11-08 23:13:29,725 - INFO - Started ingestion run 2 for source: raw_dockets.json
+2025-11-08 23:13:29,725 - INFO - Loaded 502 docket records
+2025-11-08 23:13:30,425 - INFO - Processed 100/502 records... (inserted: 0, updated: 100, failed: 0)
+2025-11-08 23:13:30,592 - INFO - Processed 200/502 records... (inserted: 11, updated: 189, failed: 0)
+2025-11-08 23:13:30,772 - INFO - Processed 300/502 records... (inserted: 28, updated: 272, failed: 0)
+2025-11-08 23:13:30,942 - INFO - Processed 400/502 records... (inserted: 51, updated: 349, failed: 0)
+2025-11-08 23:13:31,100 - INFO - Processed 500/502 records... (inserted: 72, updated: 428, failed: 0)
+2025-11-08 23:13:31,106 - INFO - Finished ingestion run 2
+2025-11-08 23:13:31,106 - INFO - ============================================================
+2025-11-08 23:13:31,106 - INFO - INGESTION SUMMARY
+2025-11-08 23:13:31,106 - INFO - ============================================================
+2025-11-08 23:13:31,106 - INFO - Run ID: 2
+2025-11-08 23:13:31,107 - INFO - Total read: 502
+2025-11-08 23:13:31,107 - INFO - Inserted: 72
+2025-11-08 23:13:31,107 - INFO - Updated: 430
+2025-11-08 23:13:31,107 - INFO - Failed: 0
+2025-11-08 23:13:31,107 - INFO - Database connection closed
