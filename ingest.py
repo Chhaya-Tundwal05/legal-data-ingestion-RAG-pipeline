@@ -19,7 +19,7 @@ import pathlib
 import psycopg2
 from psycopg2.extras import execute_values
 from psycopg2 import sql
-from datetime import datetime
+from datetime import datetime, date
 from typing import Dict, List, Tuple, Optional, Set
 from collections import defaultdict
 
@@ -296,50 +296,58 @@ class DocketIngester:
         normalized = ' '.join(party.split()).lower().strip()
         return normalized
     
-    def parse_date(self, date_str: str) -> datetime:
+    def parse_date(self, date_str: str) -> date:
         """
-        Parse various date formats into datetime object
+        Parse docket dates assuming US ordering (month-day-year).
         
-        Handles:
-        - "2023-03-15" (ISO format)
-        - "03/15/2023" (MM/DD/YYYY)
-        - "March 15, 2023" (Month DD, YYYY)
-        - "December 5, 2022"
+        Accepts:
+        - ISO: YYYY-MM-DD (2024-10-03)
+        - Numeric MDY: M/D/YYYY, M-D-YYYY, MM/DD/YYYY, MM-DD-YYYY (single-digit month/day allowed)
+        - Month name: Oct 3, 2024, October 3, 2024
         
         Raises:
             ValueError: If date cannot be parsed
         """
-        if not date_str:
-            raise ValueError("filed_date is required and cannot be empty")
+        if date_str is None:
+            raise ValueError("filed_date missing")
         
-        date_str = date_str.strip()
+        s = str(date_str).strip()
+        if not s:
+            raise ValueError("filed_date missing")
         
-        # Try ISO format first
+        # 1) Try ISO (strict)
         try:
-            return datetime.strptime(date_str, '%Y-%m-%d')
+            return datetime.strptime(s, '%Y-%m-%d').date()
         except ValueError:
             pass
         
-        # Try MM/DD/YYYY
-        try:
-            return datetime.strptime(date_str, '%m/%d/%Y')
-        except ValueError:
-            pass
+        # 2) Try numeric MDY with regex to allow single-digit month/day
+        # Pattern: M-D-YYYY or M/D/YYYY (1-2 digits for month, 1-2 digits for day)
+        mdy_numeric = re.match(r'^\s*(\d{1,2})[-/](\d{1,2})[-/](\d{4})\s*$', s)
+        if mdy_numeric:
+            mm, dd, yyyy = map(int, mdy_numeric.groups())
+            try:
+                return date(yyyy, mm, dd)
+            except ValueError as e:
+                # e.g., 13-40-2024 will land here
+                raise ValueError(f"filed_date parse failed (mdy numeric): {s!r}: {e}")
         
-        # Try Month DD, YYYY
-        try:
-            return datetime.strptime(date_str, '%B %d, %Y')
-        except ValueError:
-            pass
+        # 3) Try named-month forms
+        for fmt in ['%b %d, %Y', '%B %d, %Y']:  # Oct 3, 2024 or October 3, 2024
+            try:
+                return datetime.strptime(s, fmt).date()
+            except ValueError:
+                pass
         
-        # Try abbreviated month
-        try:
-            return datetime.strptime(date_str, '%b %d, %Y')
-        except ValueError:
-            pass
+        # 4) Try standard mdy forms with zero-padded expectations
+        for fmt in ['%m/%d/%Y', '%m-%d-%Y']:  # 10/03/2024 or 10-03-2024
+            try:
+                return datetime.strptime(s, fmt).date()
+            except ValueError:
+                pass
         
-        # If we can't parse, raise ValueError
-        raise ValueError(f"Could not parse date: {date_str}")
+        # Final failure
+        raise ValueError(f"filed_date parse failed: {s!r}")
     
     def parse_parties(self, parties_str: str) -> List[Tuple[str, str]]:
         """
@@ -588,7 +596,7 @@ class DocketIngester:
         
         # Parse date - raises ValueError if invalid
         filed_date_str = docket.get('filed_date', '')
-        filed_date = self.parse_date(filed_date_str)
+        filed_date = self.parse_date(filed_date_str)  # Returns date object
         
         # Get or create related entities - these may raise ValueError
         court_id = self.get_or_create_court(docket.get('court', ''))
@@ -618,16 +626,16 @@ class DocketIngester:
                     updated_at = now()
             RETURNING id, (xmax = 0) AS inserted
             """,
-            (
-                case_number,
-                court_id,
-                docket.get('title', ''),
-                filed_date.date(),
-                case_type_id,
-                judge_id,
-                docket.get('docket_text', ''),
-                status
-            )
+                (
+                    case_number,
+                    court_id,
+                    docket.get('title', ''),
+                    filed_date,  # Already a date object
+                    case_type_id,
+                    judge_id,
+                    docket.get('docket_text', ''),
+                    status
+                )
         )
         result = self.cursor.fetchone()
         case_id = result[0]
@@ -868,6 +876,112 @@ def main():
         ingester.close()
 
 
+def selftest():
+    """Self-test for date parser - run with --selftest flag"""
+    print("Testing date parser...")
+    
+    # Create a minimal ingester instance just for parse_date method
+    class TestIngester:
+        def parse_date(self, date_str: str) -> date:
+            """Parse docket dates assuming US ordering (month-day-year)."""
+            if date_str is None:
+                raise ValueError("filed_date missing")
+            
+            s = str(date_str).strip()
+            if not s:
+                raise ValueError("filed_date missing")
+            
+            # 1) Try ISO (strict)
+            try:
+                return datetime.strptime(s, '%Y-%m-%d').date()
+            except ValueError:
+                pass
+            
+            # 2) Try numeric MDY with regex to allow single-digit month/day
+            mdy_numeric = re.match(r'^\s*(\d{1,2})[-/](\d{1,2})[-/](\d{4})\s*$', s)
+            if mdy_numeric:
+                mm, dd, yyyy = map(int, mdy_numeric.groups())
+                try:
+                    return date(yyyy, mm, dd)
+                except ValueError as e:
+                    raise ValueError(f"filed_date parse failed (mdy numeric): {s!r}: {e}")
+            
+            # 3) Try named-month forms
+            for fmt in ['%b %d, %Y', '%B %d, %Y']:
+                try:
+                    return datetime.strptime(s, fmt).date()
+                except ValueError:
+                    pass
+            
+            # 4) Try standard mdy forms with zero-padded expectations
+            for fmt in ['%m/%d/%Y', '%m-%d-%Y']:
+                try:
+                    return datetime.strptime(s, fmt).date()
+                except ValueError:
+                    pass
+            
+            # Final failure
+            raise ValueError(f"filed_date parse failed: {s!r}")
+    
+    test_cases = [
+        ("10-3-2024", date(2024, 10, 3)),
+        ("4-5-2023", date(2023, 4, 5)),
+        ("12-11-2025", date(2025, 12, 11)),
+        ("6-6-2025", date(2025, 6, 6)),
+        ("7-17-2022", date(2022, 7, 17)),
+        ("9-25-2022", date(2022, 9, 25)),
+        ("11-1-2025", date(2025, 11, 1)),
+        ("8/8/2025", date(2025, 8, 8)),
+        ("Oct 3, 2024", date(2024, 10, 3)),
+        ("October 3, 2024", date(2024, 10, 3)),
+        ("2024-10-03", date(2024, 10, 3)),
+        ("03/15/2023", date(2023, 3, 15)),
+    ]
+    
+    parser = TestIngester()
+    passed = 0
+    failed = 0
+    
+    for input_str, expected in test_cases:
+        try:
+            result = parser.parse_date(input_str)
+            if result == expected:
+                print(f"✅ {input_str!r} → {result}")
+                passed += 1
+            else:
+                print(f"❌ {input_str!r} → {result} (expected {expected})")
+                failed += 1
+        except Exception as e:
+            print(f"❌ {input_str!r} → ERROR: {e}")
+            failed += 1
+    
+    # Test invalid dates
+    invalid_cases = [
+        "13-40-2024",  # Invalid month/day
+        "",  # Empty
+        None,  # None
+    ]
+    
+    for input_str in invalid_cases:
+        try:
+            result = parser.parse_date(input_str)
+            print(f"❌ {input_str!r} → {result} (should have raised ValueError)")
+            failed += 1
+        except ValueError:
+            print(f"✅ {input_str!r} → ValueError (as expected)")
+            passed += 1
+        except Exception as e:
+            print(f"⚠️  {input_str!r} → {type(e).__name__}: {e}")
+    
+    print(f"\nResults: {passed} passed, {failed} failed")
+    return failed == 0
+
+
 if __name__ == '__main__':
-    main()
+    import sys
+    if '--selftest' in sys.argv:
+        success = selftest()
+        sys.exit(0 if success else 1)
+    else:
+        main()
 
