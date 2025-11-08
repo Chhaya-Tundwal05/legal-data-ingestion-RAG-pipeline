@@ -209,12 +209,36 @@ CREATE INDEX IF NOT EXISTS idx_ingest_errors_resolved     ON ingest_errors (reso
 CREATE INDEX IF NOT EXISTS idx_ingest_errors_record_hash  ON ingest_errors (record_hash);
 
 -- Enforce one canonical row per normalized entity
-ALTER TABLE courts
-  ADD CONSTRAINT IF NOT EXISTS u_courts_normalized_name UNIQUE (normalized_name);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint 
+        WHERE conname = 'u_courts_normalized_name'
+    ) THEN
+        ALTER TABLE courts
+            ADD CONSTRAINT u_courts_normalized_name UNIQUE (normalized_name);
+    END IF;
+END $$;
 
-ALTER TABLE judges
-  ADD CONSTRAINT IF NOT EXISTS u_judges_normalized_name UNIQUE (normalized_name);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint 
+        WHERE conname = 'u_judges_normalized_name'
+    ) THEN
+        ALTER TABLE judges
+            ADD CONSTRAINT u_judges_normalized_name UNIQUE (normalized_name);
+    END IF;
+END $$;
 
-ALTER TABLE parties
-  ADD CONSTRAINT IF NOT EXISTS u_parties_normalized_name UNIQUE (normalized_name);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint 
+        WHERE conname = 'u_parties_normalized_name'
+    ) THEN
+        ALTER TABLE parties
+            ADD CONSTRAINT u_parties_normalized_name UNIQUE (normalized_name);
+    END IF;
+END $$;
 
