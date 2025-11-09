@@ -1,0 +1,42 @@
+### List cases (judge + year)
+GET http://localhost:8000/cases?judge=maria%20rodriguez&year=2023
+Accept: application/json
+
+### List cases (by year only)
+GET http://localhost:8000/cases?year=2024
+Accept: application/json
+
+### Get case details
+GET http://localhost:8000/cases/CASE-000123
+Accept: application/json
+
+### Semantic search 1
+POST http://localhost:8000/cases/search
+Content-Type: application/json
+Accept: application/json
+
+{
+  "query": "employment discrimination in New York",
+  "limit": 5
+}
+
+### Semantic search 2
+POST http://localhost:8000/cases/search
+Content-Type: application/json
+Accept: application/json
+
+{
+  "query": "Summary judgment motions denied in 2023",
+  "limit": 5
+}
+
+### Semantic search 3
+POST http://localhost:8000/cases/search
+Content-Type: application/json
+Accept: application/json
+
+{
+  "query": "Disputes between corporations and individual plaintiffs",
+  "limit": 5
+}
+
