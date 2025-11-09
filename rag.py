@@ -18,7 +18,7 @@ import math
 from typing import List, Dict, Tuple
 from datetime import datetime
 import psycopg2
-from psycopg2.rows import dict_row
+from psycopg2.extras import RealDictCursor
 from sentence_transformers import SentenceTransformer
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@db:5432/dockets")
@@ -84,15 +84,15 @@ CREATE INDEX IF NOT EXISTS idx_case_chunk_embeddings_cosine
   WITH (lists = 100);
 """
 
-def ensure_schema(conn: psycopg.Connection, dim: int = VECTOR_DIM) -> None:
+def ensure_schema(conn, dim: int = VECTOR_DIM) -> None:
     """Ensure pgvector extension and embedding table exist"""
     with conn.cursor() as cur:
         cur.execute(DDL.format(dim=dim))
     conn.commit()
 
-def _cases_missing_any_chunks(conn: psycopg.Connection, limit: int = 1000) -> List[Dict]:
+def _cases_missing_any_chunks(conn, limit: int = 1000) -> List[Dict]:
     """Find cases that don't have any chunks yet"""
-    with conn.cursor(row_factory=dict_row) as cur:
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("""
         SELECT c.case_number, COALESCE(c.docket_text, '') AS docket_text
         FROM cases c
@@ -103,7 +103,7 @@ def _cases_missing_any_chunks(conn: psycopg.Connection, limit: int = 1000) -> Li
         """, (limit,))
         return list(cur.fetchall())
 
-def _upsert_case_chunks(conn: psycopg.Connection, case_number: str, chunks: List[Tuple[int, str]], embeds: List[List[float]]) -> None:
+def _upsert_case_chunks(conn, case_number: str, chunks: List[Tuple[int, str]], embeds: List[List[float]]) -> None:
     """Upsert chunks and embeddings for a case"""
     with conn.cursor() as cur:
         for (cid, text), vec in zip(chunks, embeds):
@@ -128,7 +128,8 @@ def backfill_chunk_embeddings(batch_size: int = 128) -> int:
         Total number of chunks embedded
     """
     total_chunks = 0
-    with psycopg.connect(DATABASE_URL) as conn:
+    conn = psycopg2.connect(DATABASE_URL)
+    try:
         ensure_schema(conn, VECTOR_DIM)
         
         while True:
@@ -147,6 +148,8 @@ def backfill_chunk_embeddings(batch_size: int = 128) -> int:
                 embeds = embed_texts([c[1] for c in chunks])
                 _upsert_case_chunks(conn, r["case_number"], chunks, embeds)
                 total_chunks += len(chunks)
+    finally:
+        conn.close()
     
     return total_chunks
 
@@ -165,11 +168,12 @@ def search_dockets(query: str, top_k: int = 5) -> List[Dict]:
     
     qvec = embed_texts([query])[0]  # unit-normalized
     
-    with psycopg.connect(DATABASE_URL) as conn:
+    conn = psycopg2.connect(DATABASE_URL)
+    try:
         ensure_schema(conn, VECTOR_DIM)
         
         # Retrieve top N chunks, then aggregate to top-k cases by best chunk similarity
-        with conn.cursor(row_factory=dict_row) as cur:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("""
             WITH q AS (SELECT %s::vector AS v)
             SELECT
@@ -190,6 +194,8 @@ def search_dockets(query: str, top_k: int = 5) -> List[Dict]:
             """, (qvec, TOP_SNIPPET_CHARS, max(top_k * 10, 50)))
             
             chunk_rows = list(cur.fetchall())
+    finally:
+        conn.close()
     
     # Aggregate by case: take best chunk per case_number
     best_by_case: Dict[str, Dict] = {}
