@@ -17,8 +17,8 @@ import os
 import math
 from typing import List, Dict, Tuple
 from datetime import datetime
-import psycopg
-from psycopg.rows import dict_row
+import psycopg2
+from psycopg2.rows import dict_row
 from sentence_transformers import SentenceTransformer
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@db:5432/dockets")
