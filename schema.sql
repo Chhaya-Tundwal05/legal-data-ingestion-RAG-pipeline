@@ -1,6 +1,9 @@
 -- Legal Docket Database Schema
 -- Designed for scalability (millions of dockets)
 
+-- Enable pgvector extension for embeddings (Part 2)
+CREATE EXTENSION IF NOT EXISTS vector;
+
 -- Enable UUID extension for primary keys (optional, using serial for simplicity)
 -- CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
