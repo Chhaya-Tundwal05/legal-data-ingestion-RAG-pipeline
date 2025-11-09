@@ -251,13 +251,13 @@ def get_parties_coverage(conn, since: Optional[str]) -> Dict:
         if since:
             cur.execute("""
                 WITH per_case AS (
-                    SELECT cp.case_number,
+                    SELECT c.case_number,
                         BOOL_OR(cp.role = 'plaintiff') AS has_plaintiff,
                         BOOL_OR(cp.role = 'defendant') AS has_defendant
                     FROM case_parties cp
                     JOIN cases c ON cp.case_id = c.id
                     WHERE c.filed_date >= %s::date
-                    GROUP BY cp.case_number
+                    GROUP BY c.case_number
                 )
                 SELECT
                     COUNT(*) AS cases_with_parties,
@@ -268,11 +268,12 @@ def get_parties_coverage(conn, since: Optional[str]) -> Dict:
         else:
             cur.execute("""
                 WITH per_case AS (
-                    SELECT case_number,
-                        BOOL_OR(role = 'plaintiff') AS has_plaintiff,
-                        BOOL_OR(role = 'defendant') AS has_defendant
-                    FROM case_parties
-                    GROUP BY case_number
+                    SELECT c.case_number,
+                        BOOL_OR(cp.role = 'plaintiff') AS has_plaintiff,
+                        BOOL_OR(cp.role = 'defendant') AS has_defendant
+                    FROM case_parties cp
+                    JOIN cases c ON cp.case_id = c.id
+                    GROUP BY c.case_number
                 )
                 SELECT
                     COUNT(*) AS cases_with_parties,
