@@ -4,6 +4,103 @@
 
 This pipeline ingests messy, inconsistent legal docket data from JSON files, normalizes entities (courts, judges, parties, case types), and loads it into a relational PostgreSQL schema optimized for fast legal queries. The system tracks all ingestion runs and failures reliably, storing failed records in JSONL quarantine files and structured error logs for triage and reprocessing.
 
+## Setup & Run Instructions (Docker / Docker Compose)
+
+### Prerequisites
+
+- Docker and Docker Compose installed
+- No need to install PostgreSQL, Python, or dependencies locally
+
+### How to Start the Full Stack
+
+Start all services with a single command:
+
+```bash
+docker compose up -d
+```
+
+This brings up:
+- **PostgreSQL** (with pgvector extension) on port 5432
+- **Adminer** (database admin UI) on port 8080
+- **App container** (Python environment) with port 8000 exposed for the API
+
+Wait ~10 seconds for the database to initialize and apply the schema automatically.
+
+### How to Run Ingestion
+
+Ingestion is executed inside the app container, not on the host machine:
+
+```bash
+docker compose exec app python ingest.py --file raw_dockets.json
+```
+
+Or using the Makefile:
+
+```bash
+make ingest FILE=raw_dockets.json
+```
+
+### How to Run RAG Embedding Backfill
+
+Generate embeddings for semantic search:
+
+```bash
+docker compose exec app python rag.py backfill
+```
+
+This processes all cases and creates chunk embeddings for the semantic search functionality.
+
+### How to Run the API
+
+The API server is available at `http://localhost:8000` once started.
+
+Start the API server:
+
+```bash
+docker compose exec app uvicorn api:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Access interactive API documentation:
+- **Swagger UI:** http://localhost:8000/docs
+- **ReDoc:** http://localhost:8000/redoc
+
+### How to Run the Semantic Search Example
+
+Test semantic search with a curl request:
+
+```bash
+curl -X POST http://localhost:8000/cases/search \
+  -H "Content-Type: application/json" \
+  -d '{"query":"employment discrimination in New York","limit":5}'
+```
+
+Or use the included `test.http` file with REST client extensions (VS Code REST Client, JetBrains HTTP Client).
+
+### How to Stop / Reset the Stack
+
+**Stop containers:**
+
+```bash
+docker compose down
+```
+
+**Reset database (WARNING: deletes all data):**
+
+```bash
+docker compose down -v
+docker compose up -d
+```
+
+Or using the Makefile:
+
+```bash
+make reset-db
+```
+
+### Note for Non-Docker Users
+
+The project can be run locally in a virtualenv with PostgreSQL installed separately, but Docker is the default recommended path for consistency and ease of setup. For local development, ensure PostgreSQL with pgvector extension is available and update `DATABASE_URL` accordingly.
+
 ## Schema Overview
 
 The schema uses a normalized relational design with a clear separation between fact and reference data.
@@ -78,6 +175,10 @@ Invalid dates raise `ValueError` and are quarantined rather than using sentinel 
 **No alias tables yet**: The schema normalizes entities but doesn't yet include dedicated alias tables for raw spellings. The `name_variations` tables serve this purpose for now, and alias tables can be added later if needed for more sophisticated matching.
 
 **Dual error logging**: Errors are logged both structurally (in `ingest_errors` table for SQL queries) and as raw JSON copies (in quarantine files for reprocessing). This provides flexibility but requires maintaining two sources of truth.
+
+- We intentionally did NOT store the full raw JSON in a staging table. Raw records are kept as line-delimited JSON files instead, because it keeps PostgreSQL lean, avoids premature schema decisions, and makes reprocessing easier during early iterations.
+
+- We deferred adding a date dimension table because analytics queries are not part of the MVP. If we later need fast OLAP-style reporting, the model supports adding `dim_date` and foreign keys without breaking existing ingestion.
 
 ## How to Run
 
@@ -170,6 +271,14 @@ ORDER BY c.filed_date DESC;
 - Partitioning by year if dataset grows to millions of records
 - Incremental update support for daily docket feeds
 - Data quality dashboard with anomaly detection
+- Add optional SQL filters (year, court, case type) to semantic search for hybrid ranking
+- Add pagination and ordering to `GET /cases` once dataset grows
+- Partition `cases` and `case_chunk_embeddings` by year if ingestion volume reaches tens of millions of rows
+- Streaming ingestion (event-driven): evolve from batch JSON imports to a streaming pipeline (Kafka/SQS/Kinesis) with idempotent upserts and backpressure handling.
+- Async embedding pipeline: move embedding/backfill into a background task queue (Celery/RQ/Dramatiq) so new/updated dockets are embedded continuously without blocking ingestion.
+- Relevance evaluation & tuning: add an evaluation harness (precision@k, recall@k) with labeled queries; experiment with score fusion weights and chunk sizes to improve retrieval quality.
+- API hardening: introduce authentication (API keys/JWT/OAuth), basic rate limiting, and API versioning (e.g., /v1) before external exposure.
+- Hybrid lexical + semantic ranking: combine PostgreSQL full-text search (GIN/tsvector) with pgvector cosine similarity using score fusion for higher precision on keyword-sensitive queries.
 
 ## Part 2 – Semantic Retrieval (RAG over docket_text)
 
@@ -183,7 +292,7 @@ The system now supports semantic search over docket text using open-source embed
 |------|--------------|-----|
 | Embedding model | sentence-transformers/all-MiniLM-L6-v2 (open-source, 384-dim) | No API cost, reproducible, private data |
 | Vector store | pgvector inside PostgreSQL | Same DB as Part 1, keeps SQL filtering + ANN in one place |
-| Chunking strategy | Fixed character chunks (default 1200 chars, 200 overlap) | More accurate retrieval than single-vector case embedding |
+| Chunking strategy | Fixed character chunks (default 1200 chars, 200 overlap) | More accurate retrieval than single-vector case embedding. We embed per-chunk instead of a single vector per case because long docket text loses semantic meaning when collapsed into one embedding. Chunking keeps relevance high while still allowing case-level aggregation in the search results. |
 | Similarity metric | Cosine | Standard + directly supported in pgvector |
 | Index type | IVFFLAT w/ cosine ops | Fast ANN search, tunable via lists + probes |
 | Aggregation | Chunk similarity → best chunk per case → ranked cases | Lets us return case-level results while using finer chunk vectors |
@@ -205,6 +314,12 @@ python rag.py backfill
 python rag.py search --q "employment discrimination in New York" --k 5
 ```
 
+### Why embeddings are stored in PostgreSQL instead of FAISS/Qdrant
+
+- pgvector keeps both structured filtering (SQL) and ANN search in one place, which makes hybrid filters (year, court, judge) possible without multiple systems.
+- This avoids external infra for now (no separate vector DB, no sync jobs).
+- If embedding volume grows into tens of millions of chunks, the system can migrate to Qdrant/Milvus with no upstream changes in the ingestion layer.
+
 ### Trade-offs & Future Extensions
 
 - Open-source embeddings keep cost = $0, but lower recall vs OpenAI models
@@ -221,3 +336,16 @@ python rag.py search --q "employment discrimination in New York" --k 5
 | rag.py | Chunking, embedding, vector storage, semantic search |
 | ingest.py | Structured ingestion + anomaly logging |
 | case_chunk_embeddings (table) | One row per chunk per case |
+
+## Part 3 – REST API
+
+### Overview
+
+The REST API provides programmatic access to case data and semantic search capabilities. The API is built with FastAPI and exposes three endpoints: filtered case listing by judge and year, semantic search over docket content, and detailed case retrieval with party information.
+
+- FastAPI was chosen over Flask or Express because it provides automatic OpenAPI docs (`/docs`), async DB support out of the box, and type-validated request/response models.
+- Authentication and rate-limiting are intentionally omitted for this MVP, since the API is internal and used only for evaluation. Both can be added via FastAPI dependencies later.
+
+## Time Spent
+I spent roughly 5–6 hours in total. Most of that time went into the initial schema + ingestion design, then layering in the RAG pipeline and API. I focused on building a clean MVP with production-minded patterns rather than polishing every edge case.
+
