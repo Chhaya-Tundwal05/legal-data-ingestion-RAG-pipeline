@@ -104,7 +104,7 @@ The project can be run locally in a virtualenv with PostgreSQL installed separat
 ## Schema Overview
 
 The schema uses a normalized relational design with a clear separation between fact and reference data.
-
+Schema.md file shows the structure of the tables.
 ### Core Tables
 
 **`cases`** is the fact table, storing one row per docket entry with foreign keys to reference entities. It includes the case number (unique), title, filed date, docket text, status, and relationships to court, judge, and case type.
@@ -176,92 +176,10 @@ Invalid dates raise `ValueError` and are quarantined rather than using sentinel 
 
 **Dual error logging**: Errors are logged both structurally (in `ingest_errors` table for SQL queries) and as raw JSON copies (in quarantine files for reprocessing). This provides flexibility but requires maintaining two sources of truth.
 
-- We intentionally did NOT store the full raw JSON in a staging table. Raw records are kept as line-delimited JSON files instead, because it keeps PostgreSQL lean, avoids premature schema decisions, and makes reprocessing easier during early iterations.
+- I intentionally did NOT store the full raw JSON in a staging table. Raw records are kept as line-delimited JSON files instead, because it keeps PostgreSQL lean, avoids premature schema decisions, and makes reprocessing easier during early iterations.
 
-- We deferred adding a date dimension table because analytics queries are not part of the MVP. If we later need fast OLAP-style reporting, the model supports adding `dim_date` and foreign keys without breaking existing ingestion.
+- I deferred adding a date dimension table because analytics queries are not part of the MVP. If we later need fast OLAP-style reporting, the model supports adding `dim_date` and foreign keys without breaking existing ingestion.
 
-## How to Run
-
-### Prerequisites
-
-- Docker and Docker Compose installed
-- Project files in a directory
-
-### Start the Stack
-
-```bash
-# Start PostgreSQL, Adminer, and app containers
-make up
-
-# Wait ~10 seconds for database initialization
-```
-
-### Run Ingestion
-
-```bash
-# Ingest data file
-make ingest FILE=data/raw_dockets.json
-```
-
-### Access Database
-
-**Via psql:**
-```bash
-make psql
-```
-
-**Via Adminer (Web UI):**
-1. Open http://localhost:8080 in your browser
-2. Login:
-   - System: PostgreSQL
-   - Server: db
-   - Username: postgres
-   - Password: postgres
-   - Database: dockets
-
-### Other Useful Commands
-
-```bash
-# View database logs
-make logs
-
-# Shell into app container
-make sh
-
-# Stop everything
-make down
-
-# Reset database (re-apply schema)
-make down -v && make up
-```
-
-## Example SQL Queries
-
-### Find all cases for Judge X in 2023
-
-```sql
-SELECT c.case_number, c.title, c.filed_date, j.full_name as judge
-FROM cases c
-JOIN judges j ON c.judge_id = j.id
-WHERE j.normalized_name = 'maria rodriguez'  -- Works even if judge name has variations
-  AND EXTRACT(YEAR FROM c.filed_date) = 2023
-ORDER BY c.filed_date DESC;
-```
-
-### Find all civil cases filed in S.D.N.Y. involving Acme Corp
-
-```sql
-SELECT DISTINCT c.case_number, c.title, c.filed_date, co.name as court
-FROM cases c
-JOIN courts co ON c.court_id = co.id
-JOIN case_types ct ON c.case_type_id = ct.id
-JOIN case_parties cp ON c.id = cp.case_id
-JOIN parties p ON cp.party_id = p.id
-WHERE co.normalized_name = 'SDNY'  -- Handles "S.D.N.Y" vs "S.D.N.Y." variations
-  AND ct.name = 'civil'
-  AND p.normalized_name = 'acme corp'  -- Handles "Acme Corp" vs "Acme Corporation"
-ORDER BY c.filed_date DESC;
-```
 
 ## Future Extensions
 
@@ -271,14 +189,7 @@ ORDER BY c.filed_date DESC;
 - Partitioning by year if dataset grows to millions of records
 - Incremental update support for daily docket feeds
 - Data quality dashboard with anomaly detection
-- Add optional SQL filters (year, court, case type) to semantic search for hybrid ranking
-- Add pagination and ordering to `GET /cases` once dataset grows
-- Partition `cases` and `case_chunk_embeddings` by year if ingestion volume reaches tens of millions of rows
-- Streaming ingestion (event-driven): evolve from batch JSON imports to a streaming pipeline (Kafka/SQS/Kinesis) with idempotent upserts and backpressure handling.
-- Async embedding pipeline: move embedding/backfill into a background task queue (Celery/RQ/Dramatiq) so new/updated dockets are embedded continuously without blocking ingestion.
-- Relevance evaluation & tuning: add an evaluation harness (precision@k, recall@k) with labeled queries; experiment with score fusion weights and chunk sizes to improve retrieval quality.
-- API hardening: introduce authentication (API keys/JWT/OAuth), basic rate limiting, and API versioning (e.g., /v1) before external exposure.
-- Hybrid lexical + semantic ranking: combine PostgreSQL full-text search (GIN/tsvector) with pgvector cosine similarity using score fusion for higher precision on keyword-sensitive queries.
+
 
 ## Part 2 – Semantic Retrieval (RAG over docket_text)
 
@@ -292,7 +203,7 @@ The system now supports semantic search over docket text using open-source embed
 |------|--------------|-----|
 | Embedding model | sentence-transformers/all-MiniLM-L6-v2 (open-source, 384-dim) | No API cost, reproducible, private data |
 | Vector store | pgvector inside PostgreSQL | Same DB as Part 1, keeps SQL filtering + ANN in one place |
-| Chunking strategy | Fixed character chunks (default 1200 chars, 200 overlap) | More accurate retrieval than single-vector case embedding. We embed per-chunk instead of a single vector per case because long docket text loses semantic meaning when collapsed into one embedding. Chunking keeps relevance high while still allowing case-level aggregation in the search results. |
+| Chunking strategy | Fixed character chunks (default 1200 chars, 200 overlap) | More accurate retrieval than single-vector case embedding. I embed per-chunk instead of a single vector per case because long docket text loses semantic meaning when collapsed into one embedding. Chunking keeps relevance high while still allowing case-level aggregation in the search results. |
 | Similarity metric | Cosine | Standard + directly supported in pgvector |
 | Index type | IVFFLAT w/ cosine ops | Fast ANN search, tunable via lists + probes |
 | Aggregation | Chunk similarity → best chunk per case → ranked cases | Lets us return case-level results while using finer chunk vectors |
@@ -320,22 +231,20 @@ python rag.py search --q "employment discrimination in New York" --k 5
 - This avoids external infra for now (no separate vector DB, no sync jobs).
 - If embedding volume grows into tens of millions of chunks, the system can migrate to Qdrant/Milvus with no upstream changes in the ingestion layer.
 
-### Trade-offs & Future Extensions
+### Trade-offs
 
 - Open-source embeddings keep cost = $0, but lower recall vs OpenAI models
 - pgvector keeps compute + filtering in one DB, but for 50M+ chunks we may move to Qdrant/Milvus
 - Fixed chunking works for MVP, but token-based or semantic chunking can improve precision later
 - One-model / one-dimension today — if embedding model changes, table must be rebuilt
-- Future optimizations: HNSW index, hybrid BM25 + vector ranking, date/court filters built into query API, model swap env flag, async batch embedding, etc.
 
-### Folder / File responsibilities
+## Future Extensions
 
-| File | Purpose |
-|------|---------|
-| schema.sql | Core relational model (no vectors) |
-| rag.py | Chunking, embedding, vector storage, semantic search |
-| ingest.py | Structured ingestion + anomaly logging |
-| case_chunk_embeddings (table) | One row per chunk per case |
+- Partition `cases` and `case_chunk_embeddings` by year if ingestion volume reaches tens of millions of rows
+- Streaming ingestion (event-driven): evolve from batch JSON imports to a streaming pipeline (Kafka/SQS/Kinesis) with idempotent upserts and backpressure handling.
+- Async embedding pipeline: move embedding/backfill into a background task queue (Celery/RQ/Dramatiq) so new/updated dockets are embedded continuously without blocking ingestion.
+- Relevance evaluation & tuning: add an evaluation harness (precision@k, recall@k) with labeled queries; experiment with score fusion weights and chunk sizes to improve retrieval quality.
+- Hybrid lexical + semantic ranking: combine PostgreSQL full-text search (GIN/tsvector) with pgvector cosine similarity using score fusion for higher precision on keyword-sensitive queries.
 
 ## Part 3 – REST API
 
@@ -345,6 +254,14 @@ The REST API provides programmatic access to case data and semantic search capab
 
 - FastAPI was chosen over Flask or Express because it provides automatic OpenAPI docs (`/docs`), async DB support out of the box, and type-validated request/response models.
 - Authentication and rate-limiting are intentionally omitted for this MVP, since the API is internal and used only for evaluation. Both can be added via FastAPI dependencies later.
+
+You can find further API details n API.md 
+
+###Future Extensions
+
+- API hardening: introduce authentication (API keys/JWT/OAuth), basic rate limiting, and API versioning (e.g., /v1) before external exposure.
+- Add optional SQL filters (year, court, case type) to semantic search for hybrid ranking
+- Add pagination and ordering to `GET /cases` once dataset grows
 
 ## Time Spent
 I spent roughly 5–6 hours in total. Most of that time went into the initial schema + ingestion design, then layering in the RAG pipeline and API. I focused on building a clean MVP with production-minded patterns rather than polishing every edge case.
