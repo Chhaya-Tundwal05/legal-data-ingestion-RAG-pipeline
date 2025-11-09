@@ -219,17 +219,17 @@ def get_date_sanity(conn, run_id: Optional[int], since: Optional[str]) -> Dict:
 def get_entity_normalization(conn) -> Dict:
     """Get entity normalization sanity checks"""
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        # Judges
+        # Judges (uses full_name, not name)
         cur.execute("""
             SELECT 
-                COUNT(DISTINCT name) AS distinct_names,
+                COUNT(DISTINCT full_name) AS distinct_names,
                 COUNT(DISTINCT normalized_name) AS distinct_normalized,
                 COUNT(*) AS total
             FROM judges
         """)
         judges_row = cur.fetchone()
         
-        # Courts
+        # Courts (uses name)
         cur.execute("""
             SELECT 
                 COUNT(DISTINCT name) AS distinct_names,
