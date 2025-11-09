@@ -19,6 +19,7 @@ from typing import List, Dict, Tuple
 from datetime import datetime
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from pgvector.psycopg2 import register_vector
 from sentence_transformers import SentenceTransformer
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@db:5432/dockets")
@@ -129,6 +130,7 @@ def backfill_chunk_embeddings(batch_size: int = 128) -> int:
     """
     total_chunks = 0
     conn = psycopg2.connect(DATABASE_URL)
+    register_vector(conn)
     try:
         ensure_schema(conn, VECTOR_DIM)
         
@@ -169,8 +171,13 @@ def search_dockets(query: str, top_k: int = 5) -> List[Dict]:
     qvec = embed_texts([query])[0]  # unit-normalized
     
     conn = psycopg2.connect(DATABASE_URL)
+    register_vector(conn)
     try:
         ensure_schema(conn, VECTOR_DIM)
+        
+        # Set ivfflat probes for better recall
+        with conn.cursor() as _c:
+            _c.execute("SET LOCAL ivfflat.probes = %s", (int(os.environ.get('IVFFLAT_PROBES', 10)),))
         
         # Retrieve top N chunks, then aggregate to top-k cases by best chunk similarity
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
