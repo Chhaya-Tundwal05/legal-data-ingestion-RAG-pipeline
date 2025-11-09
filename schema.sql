@@ -245,3 +245,18 @@ BEGIN
     END IF;
 END $$;
 
+-- Refresh collation version to fix version mismatches
+-- This ensures the database collation matches the current OS library version
+-- This is safe to run multiple times and will only refresh if needed
+DO $$
+BEGIN
+    -- Refresh collation version for the current database
+    -- This fixes warnings about collation version mismatches
+    EXECUTE format('ALTER DATABASE %I REFRESH COLLATION VERSION', current_database());
+EXCEPTION
+    WHEN OTHERS THEN
+        -- Ignore errors (e.g., if already refreshed or not supported)
+        -- The post-init script will also handle this
+        NULL;
+END $$;
+
