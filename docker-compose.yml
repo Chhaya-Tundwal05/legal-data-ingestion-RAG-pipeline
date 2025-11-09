@@ -30,6 +30,8 @@ services:
     build: .
     environment:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/dockets
+    ports:
+      - "8000:8000"
     volumes:
       - ./:/app
     working_dir: /app
