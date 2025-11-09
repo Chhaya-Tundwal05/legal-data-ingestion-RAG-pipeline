@@ -170,3 +170,54 @@ ORDER BY c.filed_date DESC;
 - Partitioning by year if dataset grows to millions of records
 - Incremental update support for daily docket feeds
 - Data quality dashboard with anomaly detection
+
+## Part 2 – Semantic Retrieval (RAG over docket_text)
+
+### Overview
+
+The system now supports semantic search over docket text using open-source embeddings, pgvector, and chunked approximate nearest neighbor (ANN) search. Users can query docket content using natural language and receive top-K matching cases ranked by similarity scores, enabling discovery of relevant cases based on semantic meaning rather than exact keyword matches.
+
+### Design Choices & Rationale
+
+| Area | Final Choice | Why |
+|------|--------------|-----|
+| Embedding model | sentence-transformers/all-MiniLM-L6-v2 (open-source, 384-dim) | No API cost, reproducible, private data |
+| Vector store | pgvector inside PostgreSQL | Same DB as Part 1, keeps SQL filtering + ANN in one place |
+| Chunking strategy | Fixed character chunks (default 1200 chars, 200 overlap) | More accurate retrieval than single-vector case embedding |
+| Similarity metric | Cosine | Standard + directly supported in pgvector |
+| Index type | IVFFLAT w/ cosine ops | Fast ANN search, tunable via lists + probes |
+| Aggregation | Chunk similarity → best chunk per case → ranked cases | Lets us return case-level results while using finer chunk vectors |
+
+### How it works (architecture summary)
+
+- `rag.py` bootstraps `case_chunk_embeddings` table if missing
+- `backfill_chunk_embeddings()` → chunks → embeds → upserts
+- `search_dockets(query)` → embed query → ANN search → return top K cases
+- Results include: case_number, title, filed_date, judge, court, best_similarity, best_chunk_snippet
+
+### Example CLI Usage
+
+```bash
+# Backfill embeddings for all cases
+python rag.py backfill
+
+# Run a semantic query
+python rag.py search --q "employment discrimination in New York" --k 5
+```
+
+### Trade-offs & Future Extensions
+
+- Open-source embeddings keep cost = $0, but lower recall vs OpenAI models
+- pgvector keeps compute + filtering in one DB, but for 50M+ chunks we may move to Qdrant/Milvus
+- Fixed chunking works for MVP, but token-based or semantic chunking can improve precision later
+- One-model / one-dimension today — if embedding model changes, table must be rebuilt
+- Future optimizations: HNSW index, hybrid BM25 + vector ranking, date/court filters built into query API, model swap env flag, async batch embedding, etc.
+
+### Folder / File responsibilities
+
+| File | Purpose |
+|------|---------|
+| schema.sql | Core relational model (no vectors) |
+| rag.py | Chunking, embedding, vector storage, semantic search |
+| ingest.py | Structured ingestion + anomaly logging |
+| case_chunk_embeddings (table) | One row per chunk per case |
